@@ -99,29 +99,27 @@ PODSUMOWANIE
 ============================================================
 ```
 
-### Nadpisanie listy z pliku plain-text (3 domeny) + deploy
+### Dodanie domen z pliku plain-text (append, 3 domeny)
 
 ```
-$ python3 updateURLlist.py -s test.csv -l UL-marek -n pzusa.goskope.com -t TOKEN -d
+$ python3 updateURLlist.py -s test.csv -l UL-marek -n pzusa.goskope.com -t TOKEN -a
 
-2026-02-13 23:59:59 [WARNING] Brak kolumny 'AdresDomeny' w CSV — próbuję jako plain-text (jedna domena/linia)
-2026-02-13 23:59:59 [INFO] Pobrano 3 domen (3 unikalnych)
-2026-02-13 23:59:59 [INFO] Rozmiar payloadu: 0.00 MB → 1 chunk(ów)
-2026-02-14 00:00:00 [INFO] Znaleziono URL Listę 'UL-marek' (id=6)
-2026-02-14 00:00:00 [INFO] PUT chunk 1/1 (3 domen)...
-2026-02-14 00:00:00 [INFO] PUT 3 domen do listy 'UL-marek'
-2026-02-14 00:00:00 [INFO] Deploying zmian...
-2026-02-14 00:00:01 [INFO] Deploy zmian — OK
+2026-02-14 00:07:58 [WARNING] Brak kolumny 'AdresDomeny' w CSV — próbuję jako plain-text (jedna domena/linia)
+2026-02-14 00:07:58 [INFO] Pobrano 3 domen (3 unikalnych)
+2026-02-14 00:07:58 [INFO] Rozmiar payloadu: 0.00 MB → 1 chunk(ów)
+2026-02-14 00:07:59 [INFO] Znaleziono URL Listę 'UL-marek' (id=6)
+2026-02-14 00:07:59 [INFO] Append chunk 1/1 (3 domen)...
+2026-02-14 00:08:01 [INFO] PATCH/append 3 domen
 
 ============================================================
 PODSUMOWANIE
 ============================================================
   URL Lista:      UL-marek (id=6)
-  Tryb:           REPLACE
+  Tryb:           APPEND
   Źródło:         test.csv
   Domen:          3
   Chunków:        1
-  Deploy:         TAK
+  Deploy:         NIE (pending)
   Status:         OK
 ============================================================
 ```
