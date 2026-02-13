@@ -185,8 +185,8 @@ def chunk_domains(domains: List[str], max_bytes: int = MAX_PAYLOAD_BYTES) -> Lis
 # Netskope API operations
 # ---------------------------------------------------------------------------
 
-def get_urllist(tenant: str, token: str, list_name: str) -> dict:
-    """Find a URL List by name. Returns the list dict or exits with error."""
+def get_urllist(tenant: str, token: str, list_name: str) -> Optional[dict]:
+    """Find a URL List by name. Returns the list dict or None if not found."""
     url = f"https://{tenant}/api/v2/policy/urllist"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -200,9 +200,49 @@ def get_urllist(tenant: str, token: str, list_name: str) -> dict:
             return ul
 
     available = [ul.get("name") for ul in urllists]
-    log.error("URL Lista '%s' nie istnieje w Netskope.", list_name)
-    log.error("Dostępne listy: %s", ", ".join(sorted(available)) if available else "(brak)")
-    sys.exit(1)
+    log.warning("URL Lista '%s' nie istnieje w Netskope.", list_name)
+    log.info("Dostępne listy: %s", ", ".join(sorted(available)) if available else "(brak)")
+    return None
+
+
+def create_urllist(tenant: str, token: str, list_name: str, domains: List[str]) -> dict:
+    """Create a new URL List in Netskope with initial domains. Returns the created list dict."""
+    url = f"https://{tenant}/api/v2/policy/urllist"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {"name": list_name, "data": {"urls": domains, "type": "exact"}}
+    resp = api_request("POST", url, headers, json_body=body)
+    data = resp.json()
+    log.debug("POST response: %s", json.dumps(data, indent=2)[:500])
+
+    # Response may be: dict with "id", dict with "data" key, or a list
+    if isinstance(data, dict):
+        if "id" in data:
+            created = data
+        elif "data" in data and isinstance(data["data"], dict):
+            created = data["data"]
+        else:
+            created = data
+    elif isinstance(data, list) and len(data) > 0:
+        created = data[-1]
+    else:
+        log.error("Nieoczekiwana odpowiedź API przy tworzeniu listy: %s", data)
+        sys.exit(1)
+
+    log.info("Utworzono URL Listę '%s' (id=%s) z %d domenami", list_name, created.get("id"), len(domains))
+    return created
+
+
+def get_urllist_count(tenant: str, token: str, list_id: int) -> int:
+    """Get the current number of URLs in a URL List."""
+    url = f"https://{tenant}/api/v2/policy/urllist/{list_id}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    resp = api_request("GET", url, headers)
+    data = resp.json()
+    if isinstance(data, dict):
+        urls = data.get("data", {}).get("urls", data.get("urls", []))
+    else:
+        urls = []
+    return len(urls) if isinstance(urls, list) else 0
 
 
 def update_urllist_put(tenant: str, token: str, list_id: int, list_name: str,
@@ -250,6 +290,9 @@ Przykłady:
 
   # Dodanie (append) z URL
   python3 updateURLlist.py -s https://hole.cert.pl/domains/v2/domains.txt -l UL-test -t TOKEN -n tenant.goskope.com -a
+
+  # Utworzenie nowej listy (jeśli nie istnieje) i nadpisanie
+  python3 updateURLlist.py -s domains.csv -l UL-nowa -t TOKEN -n tenant.goskope.com -c
 """,
     )
     parser.add_argument("-s", "--source", required=True,
@@ -262,8 +305,14 @@ Przykłady:
                         help="Adres tenanta Netskope (np. pzusa.goskope.com)")
     parser.add_argument("-a", "--add", action="store_true",
                         help="Tryb append (PATCH) zamiast nadpisania (PUT)")
+    parser.add_argument("-c", "--create", action="store_true",
+                        help="Utwórz URL Listę jeśli nie istnieje")
     parser.add_argument("-d", "--deploy", action="store_true",
                         help="Automatyczny deploy zmian po aktualizacji")
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
 
     args = parser.parse_args()
 
@@ -288,15 +337,42 @@ Przykłady:
     total_payload = len(json.dumps(unique_domains).encode("utf-8"))
     log.info("Rozmiar payloadu: %.2f MB → %d chunk(ów)", total_payload / (1024 * 1024), len(chunks))
 
-    # --- 3. Find URL List ---
+    # --- 3. Find or create URL List ---
     urllist = get_urllist(args.nskp, args.token, args.urlist)
+    created_new = False
+
+    if urllist is None:
+        if args.create:
+            # Create list with first chunk of domains
+            log.info("Tworzenie nowej URL Listy '%s' z pierwszym chunkiem...", args.urlist)
+            urllist = create_urllist(args.nskp, args.token, args.urlist, chunks[0])
+            created_new = True
+        else:
+            log.error("Użyj flagi -c / --create aby automatycznie utworzyć listę.")
+            sys.exit(1)
+
     list_id = urllist["id"]
     list_name = urllist["name"]
+
+    # Count domains before update
+    if created_new:
+        count_before = 0
+    else:
+        count_before = get_urllist_count(args.nskp, args.token, list_id)
+        log.info("Aktualna liczba domen w liście: %d", count_before)
 
     # --- 4. Update ---
     chunks_sent = 0
 
-    if args.add:
+    if created_new:
+        # First chunk already sent during creation
+        chunks_sent = 1
+        # Remaining chunks via PATCH/append
+        for i, chunk in enumerate(chunks[1:], 2):
+            log.info("Append chunk %d/%d (%d domen)...", i, len(chunks), len(chunk))
+            append_urllist(args.nskp, args.token, list_id, chunk)
+            chunks_sent += 1
+    elif args.add:
         # Append mode: all chunks via PATCH
         for i, chunk in enumerate(chunks, 1):
             log.info("Append chunk %d/%d (%d domen)...", i, len(chunks), len(chunk))
@@ -313,20 +389,30 @@ Przykłady:
                 append_urllist(args.nskp, args.token, list_id, chunk)
             chunks_sent += 1
 
-    # --- 5. Deploy ---
+    # --- 5. Count after update ---
+    count_after = get_urllist_count(args.nskp, args.token, list_id)
+    delta = count_after - count_before
+    if delta >= 0:
+        delta_str = f"+{delta}"
+    else:
+        delta_str = str(delta)
+
+    # --- 6. Deploy ---
     if args.deploy:
         log.info("Deploying zmian...")
         deploy_changes(args.nskp, args.token)
 
-    # --- 6. Summary ---
+    # --- 7. Summary ---
     print("\n" + "=" * 60)
     print("PODSUMOWANIE")
     print("=" * 60)
     print(f"  URL Lista:      {list_name} (id={list_id})")
     print(f"  Tryb:           {'APPEND' if args.add else 'REPLACE'}")
     print(f"  Źródło:         {args.source}")
-    print(f"  Domen:          {len(unique_domains)}")
+    print(f"  Wysłano domen:  {len(unique_domains)}")
     print(f"  Chunków:        {chunks_sent}")
+    print(f"  Przed:          {count_before} domen")
+    print(f"  Po:             {count_after} domen ({delta_str})")
     print(f"  Deploy:         {'TAK' if args.deploy else 'NIE (pending)'}")
     print(f"  Status:         OK")
     print("=" * 60)
