@@ -1,0 +1,5 @@
+.claude/
+luzne notatki.md
+__pycache__/
+*.pyc
+.env
